@@ -10,7 +10,7 @@ class UserProvider extends ChangeNotifier {
   final _firebaseAuth = FirebaseAuth.instance;
   final _googleSignIn = GoogleSignIn();
 
-  // ── Datos persistidos ─────────────────────────────────────────────
+  // ── Datos en memoria ──────────────────────────────────────────────
   String _name = '';
   String _email = '';
   String _phone = '';
@@ -26,8 +26,6 @@ class UserProvider extends ChangeNotifier {
   bool get notificationsEnabled => _notificationsEnabled;
   bool get isLoggedIn => _isLoggedIn;
 
-  // Devuelve File solo si la ruta es una ruta local (no una URL http)
-  // Para URLs de Google se usa la URL directamente en la UI
   bool get hasLocalAvatar =>
       _avatarPath.isNotEmpty && !_avatarPath.startsWith('http');
 
@@ -52,27 +50,60 @@ class UserProvider extends ChangeNotifier {
   static const _kNotifs   = 'user_notifs';
   static const _kLoggedIn = 'user_logged_in';
 
-  // ── Carga inicial ─────────────────────────────────────────────────
+  // ── Carga inicial — FIX: envuelto en try/catch ────────────────────
+  // El PlatformException "Unable to establish connection on channel:
+  // dev.flutter.pigeon.shared_preferences_android.SharedPreferencesApi.getAll"
+  // ocurre cuando:
+  //   1. La app se ejecuta en un emulador/dispositivo con API < 23 (la nueva
+  //      implementación Pigeon de shared_preferences ≥2.3.x requiere API 23+).
+  //   2. El plugin no está inicializado antes del primer uso (race condition
+  //      si se llama load() antes de WidgetsFlutterBinding.ensureInitialized()).
+  //   3. Una caché de build corrupta que mezcla versiones antiguas y nuevas del
+  //      plugin nativo.
+  //
+  // SOLUCIÓN aplicada aquí:
+  //   • Llamar SharedPreferences.getInstance() dentro de un try/catch y caer
+  //     a valores por defecto si falla, para no crashear la app.
+  //   • En main.dart asegúrate de que WidgetsFlutterBinding.ensureInitialized()
+  //     se llame ANTES de await userProvider.load().
+  //   • Si el problema persiste, ejecuta:
+  //       flutter clean && flutter pub get
+  //     y en Android Studio: Build → Clean Project → Rebuild.
+  //   • Si usas API < 23, baja shared_preferences a ^2.2.3 en pubspec.yaml
+  //     (ya la tienes en esa versión, que es compatible; verifica que no haya
+  //     una versión transitiva más nueva forzada por otro plugin con
+  //     `flutter pub deps`).
   Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    _name       = prefs.getString(_kName)   ?? '';
-    _email      = prefs.getString(_kEmail)  ?? '';
-    _phone      = prefs.getString(_kPhone)  ?? '';
-    _avatarPath = prefs.getString(_kAvatar) ?? '';
-    _notificationsEnabled = prefs.getBool(_kNotifs)   ?? true;
-    _isLoggedIn           = prefs.getBool(_kLoggedIn) ?? false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _name       = prefs.getString(_kName)   ?? '';
+      _email      = prefs.getString(_kEmail)  ?? '';
+      _phone      = prefs.getString(_kPhone)  ?? '';
+      _avatarPath = prefs.getString(_kAvatar) ?? '';
+      _notificationsEnabled = prefs.getBool(_kNotifs)   ?? true;
+      _isLoggedIn           = prefs.getBool(_kLoggedIn) ?? false;
+    } catch (e) {
+      // Si SharedPreferences falla (emulador antiguo, plugin no inicializado,
+      // etc.) continuamos con valores por defecto en memoria.
+      debugPrint('[UserProvider] SharedPreferences.load falló: $e');
+      // Valores por defecto ya asignados en las declaraciones de campo.
+    }
     notifyListeners();
   }
 
-  // ── Persistir todo ────────────────────────────────────────────────
+  // ── Persistir todo — FIX: mismo guard try/catch ───────────────────
   Future<void> _save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kName,   _name);
-    await prefs.setString(_kEmail,  _email);
-    await prefs.setString(_kPhone,  _phone);
-    await prefs.setString(_kAvatar, _avatarPath);
-    await prefs.setBool(_kNotifs,   _notificationsEnabled);
-    await prefs.setBool(_kLoggedIn, _isLoggedIn);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kName,   _name);
+      await prefs.setString(_kEmail,  _email);
+      await prefs.setString(_kPhone,  _phone);
+      await prefs.setString(_kAvatar, _avatarPath);
+      await prefs.setBool(_kNotifs,   _notificationsEnabled);
+      await prefs.setBool(_kLoggedIn, _isLoggedIn);
+    } catch (e) {
+      debugPrint('[UserProvider] SharedPreferences.save falló: $e');
+    }
   }
 
   // ── Login ─────────────────────────────────────────────────────────
@@ -85,24 +116,25 @@ class UserProvider extends ChangeNotifier {
     _name       = name;
     _email      = email;
     _phone      = phone;
-    // Solo sobreescribe avatar si viene uno nuevo; conserva el local si ya hay
     if (avatarPath.isNotEmpty) _avatarPath = avatarPath;
     _isLoggedIn = true;
     notifyListeners();
     await _save();
   }
 
-  // ── Logout — cierra sesión local + Firebase + Google ──────────────
+  // ── Logout ────────────────────────────────────────────────────────
   Future<void> logout() async {
     _isLoggedIn = false;
     notifyListeners();
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kLoggedIn, false);
-
     try {
-      await _firebaseAuth.signOut();
-    } catch (_) {}
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kLoggedIn, false);
+    } catch (e) {
+      debugPrint('[UserProvider] SharedPreferences.logout falló: $e');
+    }
+
+    try { await _firebaseAuth.signOut(); } catch (_) {}
 
     try {
       if (await _googleSignIn.isSignedIn()) {
@@ -124,7 +156,7 @@ class UserProvider extends ChangeNotifier {
     await _save();
   }
 
-  // ── Actualizar avatar (ruta local de image_picker) ────────────────
+  // ── Actualizar avatar ─────────────────────────────────────────────
   Future<void> updateAvatar(String path) async {
     _avatarPath = path;
     notifyListeners();

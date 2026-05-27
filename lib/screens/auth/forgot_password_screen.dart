@@ -1,5 +1,6 @@
 // lib/screens/auth/forgot_password_screen.dart
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../theme/app_theme.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -11,8 +12,8 @@ class ForgotPasswordScreen extends StatefulWidget {
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _emailCtrl = TextEditingController();
-  bool _loading  = false;
-  bool _sent     = false;
+  bool _loading = false;
+  bool _sent    = false;
   String? _error;
 
   @override
@@ -27,9 +28,29 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       setState(() => _error = 'Ingresa un correo electrónico válido.');
       return;
     }
+
     setState(() { _loading = true; _error = null; });
-    await Future.delayed(const Duration(milliseconds: 1200)); // simula red
-    setState(() { _loading = false; _sent = true; });
+
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      if (mounted) setState(() { _loading = false; _sent = true; });
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        _loading = false;
+        _error = switch (e.code) {
+          'user-not-found'       => 'No existe una cuenta con ese correo.',
+          'invalid-email'        => 'El formato del correo no es válido.',
+          'network-request-failed' => 'Sin conexión. Verifica tu red.',
+          'too-many-requests'    => 'Demasiados intentos. Espera unos minutos.',
+          _                      => 'Error al enviar el correo (${e.code}).',
+        };
+      });
+    } catch (_) {
+      setState(() {
+        _loading = false;
+        _error = 'Ocurrió un error inesperado. Intenta de nuevo.';
+      });
+    }
   }
 
   @override
@@ -57,8 +78,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 28),
-          child: _sent ? _SuccessView(email: _emailCtrl.text.trim(),
-                onBack: () => Navigator.pop(context))
+          child: _sent
+              ? _SuccessView(
+                  email: _emailCtrl.text.trim(),
+                  onBack: () => Navigator.pop(context),
+                )
               : _FormView(
                   emailCtrl: _emailCtrl,
                   loading: _loading,
@@ -70,6 +94,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 }
+
+// ── Los widgets de UI no cambian nada ─────────────────────────────────
 
 class _FormView extends StatelessWidget {
   final TextEditingController emailCtrl;
@@ -90,12 +116,9 @@ class _FormView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 36),
-
-        // Ícono
         Center(
           child: Container(
-            width: 72,
-            height: 72,
+            width: 72, height: 72,
             decoration: BoxDecoration(
               color: AppTheme.accent.withOpacity(0.1),
               shape: BoxShape.circle,
@@ -106,7 +129,6 @@ class _FormView extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 28),
-
         const Text('¿Olvidaste tu contraseña?',
             style: TextStyle(
                 color: AppTheme.textPrimary,
@@ -119,7 +141,6 @@ class _FormView extends StatelessWidget {
               color: AppTheme.textSecondary, fontSize: 14, height: 1.5),
         ),
         const SizedBox(height: 32),
-
         const Text('Correo electrónico',
             style: TextStyle(
                 color: AppTheme.textSecondary,
@@ -135,27 +156,23 @@ class _FormView extends StatelessWidget {
           child: TextField(
             controller: emailCtrl,
             keyboardType: TextInputType.emailAddress,
-            style:
-                const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
             decoration: const InputDecoration(
               prefixIcon: Icon(Icons.email_outlined,
                   color: AppTheme.accent, size: 20),
               hintText: 'tu@correo.com',
-              hintStyle:
-                  TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+              hintStyle: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
               border: InputBorder.none,
               contentPadding:
                   EdgeInsets.symmetric(horizontal: 16, vertical: 15),
             ),
           ),
         ),
-
         if (error != null) ...[
           const SizedBox(height: 12),
           Container(
             width: double.infinity,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
               color: const Color(0xFF7F1D1D).withOpacity(0.15),
               borderRadius: BorderRadius.circular(10),
@@ -168,7 +185,6 @@ class _FormView extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 28),
-
         SizedBox(
           width: double.infinity,
           child: GestureDetector(
@@ -187,16 +203,14 @@ class _FormView extends StatelessWidget {
                 boxShadow: [
                   BoxShadow(
                     color: AppTheme.accent.withOpacity(0.3),
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
+                    blurRadius: 16, offset: const Offset(0, 4),
                   ),
                 ],
               ),
               child: Center(
                 child: loading
                     ? const SizedBox(
-                        width: 22,
-                        height: 22,
+                        width: 22, height: 22,
                         child: CircularProgressIndicator(
                             color: Colors.white, strokeWidth: 2.5),
                       )
@@ -225,13 +239,12 @@ class _SuccessView extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Container(
-          width: 88,
-          height: 88,
+          width: 88, height: 88,
           decoration: BoxDecoration(
             color: AppTheme.success.withOpacity(0.1),
             shape: BoxShape.circle,
-            border:
-                Border.all(color: AppTheme.success.withOpacity(0.3), width: 2),
+            border: Border.all(
+                color: AppTheme.success.withOpacity(0.3), width: 2),
           ),
           child: const Icon(Icons.mark_email_read_outlined,
               color: AppTheme.success, size: 44),

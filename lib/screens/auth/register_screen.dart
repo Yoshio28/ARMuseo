@@ -1,26 +1,27 @@
-// lib/screens/auth/login_screen.dart
+// lib/screens/auth/register_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:provider/provider.dart';
 import '../../providers/user_provider.dart';
 import '../../theme/app_theme.dart';
-import 'forgot_password_screen.dart';
-import 'register_screen.dart';
 
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen>
+class _RegisterScreenState extends State<RegisterScreen>
     with SingleTickerProviderStateMixin {
+  final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
-  bool _obscure = true;
+  final _confirmCtrl = TextEditingController();
+
+  bool _obscurePass = true;
+  bool _obscureConfirm = true;
   bool _loading = false;
   String? _error;
 
@@ -42,21 +43,25 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void dispose() {
     _animCtrl.dispose();
+    _nameCtrl.dispose();
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
+    _confirmCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _register() async {
     setState(() {
       _loading = true;
       _error = null;
     });
 
+    final name = _nameCtrl.text.trim();
     final email = _emailCtrl.text.trim();
     final pass = _passwordCtrl.text;
+    final confirm = _confirmCtrl.text;
 
-    if (email.isEmpty || pass.isEmpty) {
+    if (name.isEmpty || email.isEmpty || pass.isEmpty || confirm.isEmpty) {
       setState(() {
         _error = 'Completa todos los campos.';
         _loading = false;
@@ -77,18 +82,39 @@ class _LoginScreenState extends State<LoginScreen>
       });
       return;
     }
+    if (pass != confirm) {
+      setState(() {
+        _error = 'Las contraseñas no coinciden.';
+        _loading = false;
+      });
+      return;
+    }
 
     try {
       final credential = await FirebaseAuth.instance
-          .signInWithEmailAndPassword(email: email, password: pass);
+          .createUserWithEmailAndPassword(email: email, password: pass);
 
       final user = credential.user;
-      if (user != null && mounted) {
-        await context.read<UserProvider>().login(
-              name: user.displayName ?? email.split('@')[0],
-              email: user.email ?? email,
-              avatarPath: user.photoURL ?? '',
-            );
+      if (user != null) {
+        await user.updateDisplayName(name);
+
+        await FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(user.uid)
+            .set({
+          'email': email,
+          'nombre': name,
+          'activo': true,
+          'fechaCreacion': FieldValue.serverTimestamp(),
+        });
+
+        if (mounted) {
+          await context.read<UserProvider>().login(
+                name: name,
+                email: email,
+                avatarPath: user.photoURL ?? '',
+              );
+        }
       }
     } on FirebaseAuthException catch (e) {
       setState(() {
@@ -103,80 +129,18 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  Future<void> _googleLogin() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      final googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) {
-        setState(() => _loading = false);
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      final userCredential =
-          await FirebaseAuth.instance.signInWithCredential(credential);
-
-      final user = userCredential.user;
-      if (user != null && mounted) {
-        if (userCredential.additionalUserInfo?.isNewUser == true) {
-          await FirebaseFirestore.instance
-              .collection('usuarios')
-              .doc(user.uid)
-              .set({
-            'email': user.email ?? '',
-            'nombre': user.displayName ?? '',
-            'activo': true,
-            'fechaCreacion': FieldValue.serverTimestamp(),
-          });
-        }
-
-        await context.read<UserProvider>().login(
-              name: user.displayName ?? user.email!.split('@')[0],
-              email: user.email ?? '',
-              avatarPath: user.photoURL ?? '',
-            );
-      }
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        _error = _authError(e.code);
-      });
-    } catch (e) {
-      setState(() {
-        _error = 'No se pudo iniciar sesión con Google.';
-      });
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
   String _authError(String code) {
     switch (code) {
-      case 'user-not-found':
-        return 'No existe una cuenta con ese correo.';
-      case 'wrong-password':
-      case 'invalid-credential':
-        return 'Correo o contraseña incorrectos.';
+      case 'email-already-in-use':
+        return 'Este correo ya está registrado. Intenta iniciar sesión.';
       case 'invalid-email':
         return 'El formato del correo no es válido.';
-      case 'user-disabled':
-        return 'Esta cuenta ha sido deshabilitada.';
-      case 'too-many-requests':
-        return 'Demasiados intentos. Espera unos minutos.';
+      case 'weak-password':
+        return 'La contraseña es muy débil. Usa al menos 6 caracteres.';
       case 'network-request-failed':
         return 'Sin conexión a internet. Verifica tu red.';
-      case 'email-already-in-use':
-        return 'Este correo ya está registrado.';
       default:
-        return 'Error de autenticación ($code).';
+        return 'Error al crear la cuenta ($code).';
     }
   }
 
@@ -196,7 +160,6 @@ class _LoginScreenState extends State<LoginScreen>
                 children: [
                   const SizedBox(height: 52),
 
-                  // Logo / brand
                   Center(
                     child: Column(
                       children: [
@@ -232,58 +195,76 @@ class _LoginScreenState extends State<LoginScreen>
                                 fontWeight: FontWeight.w800,
                                 letterSpacing: -0.5)),
                         const SizedBox(height: 6),
-                        const Text('Inicia sesión para continuar',
+                        const Text('Crea tu cuenta',
                             style: TextStyle(
                                 color: AppTheme.textSecondary, fontSize: 14)),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 44),
+                  const SizedBox(height: 40),
 
-                  _FieldLabel('Correo electrónico'),
+                  const _FieldLabel('NOMBRE'),
+                  const SizedBox(height: 8),
+                  _InputField(
+                    controller: _nameCtrl,
+                    hint: 'Tu nombre completo',
+                    icon: Icons.person_outline_rounded,
+                    keyboardType: TextInputType.name,
+                  ),
+                  const SizedBox(height: 16),
+
+                  const _FieldLabel('CORREO ELECTRÓNICO'),
                   const SizedBox(height: 8),
                   _InputField(
                     controller: _emailCtrl,
-                    hint: 'tu@correo.com',
-                    icon: Icons.email_outlined,
+                    hint: 'correo@ejemplo.com',
+                    icon: Icons.mail_outline_rounded,
                     keyboardType: TextInputType.emailAddress,
                   ),
                   const SizedBox(height: 16),
 
-                  _FieldLabel('Contraseña'),
+                  const _FieldLabel('CONTRASEÑA'),
                   const SizedBox(height: 8),
                   _InputField(
                     controller: _passwordCtrl,
-                    hint: '••••••••',
+                    hint: 'Mínimo 6 caracteres',
                     icon: Icons.lock_outline_rounded,
-                    obscure: _obscure,
+                    obscure: _obscurePass,
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscure
+                        _obscurePass
                             ? Icons.visibility_outlined
                             : Icons.visibility_off_outlined,
                         color: AppTheme.textSecondary,
                         size: 20,
                       ),
-                      onPressed: () => setState(() => _obscure = !_obscure),
+                      onPressed: () =>
+                          setState(() => _obscurePass = !_obscurePass),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Campo: Confirmar contraseña
+                  const _FieldLabel('CONFIRMAR CONTRASEÑA'),
+                  const SizedBox(height: 8),
+                  _InputField(
+                    controller: _confirmCtrl,
+                    hint: 'Repite tu contraseña',
+                    icon: Icons.lock_outline_rounded,
+                    obscure: _obscureConfirm,
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscureConfirm
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                        color: AppTheme.textSecondary,
+                        size: 20,
+                      ),
+                      onPressed: () =>
+                          setState(() => _obscureConfirm = !_obscureConfirm),
                     ),
                   ),
                   const SizedBox(height: 10),
-
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: GestureDetector(
-                      onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const ForgotPasswordScreen())),
-                      child: const Text('¿Olvidaste tu contraseña?',
-                          style: TextStyle(
-                              color: AppTheme.accent,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600)),
-                    ),
-                  ),
 
                   if (_error != null) ...[
                     const SizedBox(height: 12),
@@ -307,7 +288,7 @@ class _LoginScreenState extends State<LoginScreen>
                   SizedBox(
                     width: double.infinity,
                     child: GestureDetector(
-                      onTap: _loading ? null : _login,
+                      onTap: _loading ? null : _register,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(vertical: 15),
@@ -336,7 +317,7 @@ class _LoginScreenState extends State<LoginScreen>
                                   height: 22,
                                   child: CircularProgressIndicator(
                                       color: Colors.white, strokeWidth: 2.5))
-                              : const Text('Ingresar',
+                              : const Text('Crear cuenta',
                                   style: TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w700,
@@ -345,87 +326,21 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24),
-
-                  Row(
-                    children: [
-                      Expanded(
-                          child: Divider(
-                              color: AppTheme.border.withOpacity(0.8),
-                              thickness: 1)),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 14),
-                        child: Text('o continúa con',
-                            style: TextStyle(
-                                color: AppTheme.textSecondary, fontSize: 12)),
-                      ),
-                      Expanded(
-                          child: Divider(
-                              color: AppTheme.border.withOpacity(0.8),
-                              thickness: 1)),
-                    ],
-                  ),
                   const SizedBox(height: 20),
 
-                  GestureDetector(
-                    onTap: _loading ? null : _googleLogin,
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(14),
-                        color: AppTheme.surfaceCard,
-                        border: Border.all(color: AppTheme.border),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 22,
-                            height: 22,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white,
-                              border: Border.all(
-                                  color: Colors.grey.shade300, width: 0.5),
-                            ),
-                            child: const Center(
-                              child: Text('G',
-                                  style: TextStyle(
-                                      color: Color(0xFF4285F4),
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 13)),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          const Text('Continuar con Google',
-                              style: TextStyle(
-                                  color: AppTheme.textPrimary,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 36),
-
-                  const SizedBox(height: 20),
+                  // Volver a iniciar sesión
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       const Text(
-                        '¿No tienes cuenta? ',
+                        '¿Ya tienes cuenta? ',
                         style: TextStyle(
                             color: AppTheme.textSecondary, fontSize: 13),
                       ),
                       GestureDetector(
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const RegisterScreen()),
-                        ),
+                        onTap: () => Navigator.pop(context),
                         child: const Text(
-                          'Crear cuenta',
+                          'Inicia sesión',
                           style: TextStyle(
                             color: AppTheme.accent,
                             fontSize: 13,
@@ -435,6 +350,7 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                     ],
                   ),
+                  const SizedBox(height: 36),
                 ],
               ),
             ),
@@ -445,7 +361,7 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-// ── Widgets aux ────
+// ── Widgets aux ─────────────────
 
 class _FieldLabel extends StatelessWidget {
   final String text;
